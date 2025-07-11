@@ -1,0 +1,79 @@
+# multi_source_fusion/config.yaml
+
+# 1. 数据路径配置
+data_paths:
+  imu_path: "data_raw/IMU.txt"
+  gnss_path: "data_raw/BeiDou.pos"
+  odo_path: "data_raw/odo_3d.txt"
+  map_path: "data_raw/truth.nav" # 地图文件路径更新为.nav
+  output_path: "results/"
+
+# 2. 传感器特性参数
+sensor_params:
+  imu:
+    rate_hz: 200.0
+    # 陀螺仪噪声模型 (rad/s)
+    gyro_noise_std: 0.001   # 角度随机游走 (ARW)
+    gyro_bias_std: 1.0e-5   # 偏置不稳定性
+    # 加速度计噪声模型 (m/s^2)
+    accel_noise_std: 0.01   # 速度随机游走 (VRW)
+    accel_bias_std: 1.0e-4  # 偏置不稳定性
+  gnss:
+    rate_hz: 1.0
+    # GNSS测量噪声标准差
+    pos_std_h: 0.5          # 水平位置 (m)
+    pos_std_v: 1.0          # 垂直位置 (m)
+    vel_std_h: 0.1          # 水平速度 (m/s)
+    vel_std_v: 0.2          # 垂直速度 (m/s)
+  odo:
+    rate_hz: 200.0
+    vel_std: 0.05           # 速度测量标准差 (m/s)
+
+# 3. 初始对准与状态
+initial_state:
+  # 初始姿态 (roll, pitch, yaw) in degrees
+  init_att: [0.0, 0.0, 90.0]
+  # 初始姿态不确定性 (degrees)
+  init_att_std: [1.0, 1.0, 5.0]
+  # 初始速度 (Ve, Vn, Vu) in m/s
+  init_vel: [0.0, 0.0, 0.0]
+  # 初始速度不确定性 (m/s)
+  init_vel_std: [0.1, 0.1, 0.1]
+  # 初始位置 (lat, lon, h) in deg, deg, m
+  init_pos: [30.5, 114.3, 30.0]
+  # 初始位置不确定性 (m)
+  init_pos_std: [10.0, 10.0, 20.0]
+
+# 4. EKF滤波器参数
+ekf_params:
+  # 过程噪声协方差Q的对角线元素
+  q_att: [1.0e-6, 1.0e-6, 1.0e-5] # (rad^2)
+  q_vel: [1.0e-4, 1.0e-4, 1.0e-4] # (m/s)^2
+  q_pos: [1.0e-3, 1.0e-3, 1.0e-3] # (m^2)
+  # 测量噪声协方差R的对角线元素 (来自GNSS)
+  r_pos: [0.25, 0.25, 1.0]       # (m^2)
+
+# 5. MTINN模型超参数
+mtinn_hyperparams:
+  learning_rate: 0.001
+  batch_size: 16
+  num_epochs: 100
+  sequence_length: 50
+  dropout_rate: 0.2
+
+# 6. 地图匹配与反馈控制
+map_matching:
+  enable: true
+  search_radius_m: 50.0
+  weight_dist: 0.6  # 距离权重
+  weight_angle: 0.4 # 方向权重
+
+feedback_loop:
+  enable: true
+  damping_factor: 0.5 # 误差反馈阻尼系数
+
+# 7. 物理常数
+physical_params:
+  earth_rate: 7.292115e-5 # 地球自转角速率 (rad/s)
+  earth_a: 6378137.0      # 地球长半轴 (m)
+  earth_e2: 0.00669438    # 地球第一偏心率平方

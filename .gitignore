@@ -1,0 +1,83 @@
+# =================================================================
+#               .gitignore for Python/PyTorch Project
+# =================================================================
+
+# 1. Byte-compiled / optimized / DLL files
+#    Python生成的缓存文件，每次运行都会产生，无需版本控制。
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 2. Virtual Environments
+#    虚拟环境是本地依赖，每个开发者都应自行创建。
+#    上传虚拟环境会导致仓库巨大且无法在其他机器上使用。
+venv/
+env/
+.venv/
+.env/
+*/venv/
+*/env/
+*/.venv/
+*/.env/
+
+# 3. Project-Specific Data and Outputs (IMPORTANT!)
+#    根据我们的项目结构，忽略原始数据、模型和结果。
+#    这些文件通常很大，不适合放在Git仓库中。
+#    通常使用Git LFS或云存储来管理它们。
+data_raw/
+models/
+results/
+*.pth
+*.pt
+*.onnx
+
+# 4. Distribution / Build artifacts
+#    打包和分发项目时生成的临时文件。
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 5. IDE / Editor configuration files
+#    不同开发者的IDE配置不同，应保持本地化。
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 6. Operating System Files
+#    macOS和Windows系统自动生成的元数据文件。
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 7. Log and Temporary Files
+#    日志文件和临时文件，对项目代码无用。
+*.log
+*.tmp
+*.temp
+
+# 8. Notebook Checkpoints
+#    Jupyter Notebook的自动保存检查点。
+.ipynb_checkpoints
