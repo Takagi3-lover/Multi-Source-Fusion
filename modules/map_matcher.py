@@ -5,9 +5,9 @@ import pandas as pd
 from scipy.spatial import KDTree
 from typing import Optional
 
-from ..core.types import SystemState
-from ..core.config import config
-from ..core.coordinates import CoordinateSystem
+from core.types import SystemState
+from core.config import config
+from core.coordinates import CoordinateSystem
 
 
 class MapMatcher:
@@ -75,7 +75,7 @@ class MapMatcher:
 
             if not candidate_indices:
                 # 如果没有找到候选点，则返回原始状态
-                print("警告: 未找到候选地图点，返回原始状态")
+                # print("警告: 未找到候选地图点，返回原始状态")
                 return current_state
 
             # 3. 计算每个候选点的得分

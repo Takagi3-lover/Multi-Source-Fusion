@@ -4,28 +4,24 @@ import torch
 import numpy as np
 from typing import Dict, Tuple, Optional
 
-from ..modules.mtinn_model import MTINN
-from ..core.types import SystemState
+from modules.mtinn_model import MTINN
+from core.types import SystemState
 
 
 class MTINNPredictor:
     """
-    一个围绕已训练MTINN模型的包装器，用于单步预测和不确定性估计。
+    MTINN预测器，输出状态变化量。
     """
 
     def __init__(self, model_path: str, device: torch.device):
-        """
-        Args:
-            model_path (str): 训练好的模型权重文件路径 (.pth)。
-            device (torch.device): 运行模型的设备 (cpu or cuda)。
-        """
         self.device = device
         self.model = MTINN().to(device)
 
         try:
             self.model.load_state_dict(torch.load(model_path, map_location=device))
-            self.model.eval()  # 默认设置为评估模式
+            self.model.eval()
             print(f"MTINN预测器已加载模型: {model_path}")
+            print("预测器模式: 输出状态变化量")
         except FileNotFoundError:
             print(f"错误: 模型文件 {model_path} 未找到")
             raise
@@ -36,76 +32,115 @@ class MTINNPredictor:
     def predict_step_with_uncertainty(
             self,
             imu_data: Dict[str, float],
-            odo_data: Dict[str, float],
+            odo_data: Optional[Dict[str, float]],  # 改为Optional
             prev_state: SystemState,
             feedback_error: Optional[np.ndarray] = None,
             n_samples: int = 20
     ) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
         """
-        使用蒙特卡洛Dropout (MC Dropout) 执行单步预测并估计不确定性。
-
-        Args:
-            imu_data (Dict[str, float]): 当前IMU读数。
-            odo_data (Dict[str, float]): 当前ODO读数。
-            prev_state (SystemState): 上一时刻的系统状态。
-            feedback_error (Optional[np.ndarray]): 来自地图匹配的反馈误差。
-            n_samples (int): MC Dropout的采样次数。
-
-        Returns:
-            Tuple[Dict[str, np.ndarray], np.ndarray]:
-                - 预测状态的均值 (字典格式)。
-                - 预测的协方差矩阵 Q_k (9x9 numpy数组)。
+        预测状态变化量并估计不确定性。
         """
-        # 1. 准备单步输入张量
+        # 1. 准备输入
+        # 如果没有里程计数据，使用0作为默认值
+        odo_velocity = odo_data['velocity'] if odo_data is not None else 0.0
+
         input_vec = np.array([
             imu_data['ax'], imu_data['ay'], imu_data['az'],
             imu_data['gx'], imu_data['gy'], imu_data['gz'],
-            odo_data['velocity']
+            odo_velocity
         ], dtype=np.float32)
 
-        # 将输入扩展为 (batch_size=n_samples, seq_len=1, input_size=7)
         input_tensor = torch.from_numpy(input_vec).unsqueeze(0).unsqueeze(0).to(self.device)
-        input_tensor = input_tensor.repeat(n_samples, 1, 1)
 
-        # 2. 启用Dropout以进行不确定性估计
+        # 2. MC Dropout预测
         self.model.train()
-
-        # 3. 多次前向传播
         predictions_list = []
+
         with torch.no_grad():
             for _ in range(n_samples):
-                pred = self.model(input_tensor[:1])  # 只取一个样本进行预测
-                predictions_list.append(pred.squeeze(1))  # 移除seq_len维度
+                try:
+                    pred = self.model(input_tensor)  # (1, 1, 9)
+                    predictions_list.append(pred.squeeze())  # (9,)
+                except Exception as e:
+                    print(f"预测过程中出错: {e}")
+                    predictions_list.append(torch.zeros(9, device=self.device))
 
-        # 堆叠所有预测结果
-        predictions = torch.stack(predictions_list, dim=0)  # (n_samples, 1, 9)
-        predictions = predictions.squeeze(1)  # (n_samples, 9)
+        if not predictions_list:
+            print("警告: 所有预测都失败，返回零变化量")
+            delta_state_dict = {
+                'attitude': np.zeros(3),
+                'velocity': np.zeros(3),
+                'position': np.zeros(3)
+            }
+            covariance_prediction = np.eye(9) * 1e-6
+            return delta_state_dict, covariance_prediction
 
-        # 4. 计算均值和协方差
-        mean_prediction = predictions.mean(dim=0).cpu().numpy()
+        # 3. 计算统计量
+        predictions = torch.stack(predictions_list, dim=0)  # (n_samples, 9)
+        mean_delta = predictions.mean(dim=0).cpu().numpy()
 
-        # 计算协方差矩阵
-        predictions_centered = predictions - predictions.mean(dim=0, keepdim=True)
-        covariance_prediction = torch.mm(predictions_centered.T, predictions_centered) / (n_samples - 1)
-        covariance_prediction = covariance_prediction.cpu().numpy()
+        if n_samples > 1:
+            predictions_centered = predictions - predictions.mean(dim=0, keepdim=True)
+            covariance_prediction = torch.mm(predictions_centered.T, predictions_centered) / (n_samples - 1)
+            covariance_prediction = covariance_prediction.cpu().numpy()
+        else:
+            covariance_prediction = np.eye(9) * 1e-6
 
-        # 5. 格式化输出
-        predicted_state_dict = {
-            'attitude': mean_prediction[:3],
-            'velocity': mean_prediction[3:6],
-            'position': mean_prediction[6:9]
+        # 确保协方差矩阵正定
+        try:
+            np.linalg.cholesky(covariance_prediction)
+        except np.linalg.LinAlgError:
+            covariance_prediction += np.eye(9) * 1e-8
+
+        # 4. 格式化输出 - 这些是变化量
+        delta_state_dict = {
+            'attitude': mean_delta[:3],
+            'velocity': mean_delta[3:6],
+            'position': mean_delta[6:9]
         }
 
-        # 将上一时刻的位置和速度加到预测的增量上
-        # 注意：MTINN被设计为预测下一个完整状态，而不是增量。
-        # 如果它被训练为预测增量，则需要加上 prev_state。
-        # 根据设计文档，MTINN直接预测状态 Yt，所以这里不需要加法。
-
-        # 如果有反馈误差，则应用它
+        # 5. 应用反馈误差到位置变化量
         if feedback_error is not None and len(feedback_error) >= 3:
-            predicted_state_dict['position'] += feedback_error[:3]
+            delta_state_dict['position'] += feedback_error[:3] * 0.1  # 小幅调整
 
-        # 恢复评估模式
         self.model.eval()
+        return delta_state_dict, covariance_prediction
 
-        return predicted_state_dict, covariance_prediction
+    def predict_single_step(
+            self,
+            imu_data: Dict[str, float],
+            odo_data: Optional[Dict[str, float]],  # 改为Optional
+            prev_state: SystemState,
+            feedback_error: Optional[np.ndarray] = None
+    ) -> Dict[str, np.ndarray]:
+        """执行单步预测，返回状态变化量"""
+        # 如果没有里程计数据，使用0作为默认值
+        odo_velocity = odo_data['velocity'] if odo_data is not None else 0.0
+
+        input_vec = np.array([
+            imu_data['ax'], imu_data['ay'], imu_data['az'],
+            imu_data['gx'], imu_data['gy'], imu_data['gz'],
+            odo_velocity
+        ], dtype=np.float32)
+
+        input_tensor = torch.from_numpy(input_vec).unsqueeze(0).unsqueeze(0).to(self.device)
+
+        self.model.eval()
+        with torch.no_grad():
+            try:
+                pred = self.model(input_tensor)
+                delta_prediction = pred.squeeze().cpu().numpy()
+            except Exception as e:
+                print(f"单步预测出错: {e}")
+                delta_prediction = np.zeros(9)
+
+        delta_state_dict = {
+            'attitude': delta_prediction[:3],
+            'velocity': delta_prediction[3:6],
+            'position': delta_prediction[6:9]
+        }
+
+        if feedback_error is not None and len(feedback_error) >= 3:
+            delta_state_dict['position'] += feedback_error[:3] * 0.1
+
+        return delta_state_dict

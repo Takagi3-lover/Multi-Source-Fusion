@@ -1,7 +1,7 @@
 # multi_source_fusion/core/coordinates.py
 
 import numpy as np
-from .config import config
+from core.config import config
 
 class CoordinateSystem:
     """
@@ -13,6 +13,7 @@ class CoordinateSystem:
     # 从配置文件加载物理常数
     A = config.get('physical_params.earth_a', 6378137.0)
     E2 = config.get('physical_params.earth_e2', 0.00669438)
+    EARTH_RATE = config.get('physical_params.earth_rate', 7.292115e-5)
 
     @staticmethod
     def get_radii(lat_rad: float) -> tuple:

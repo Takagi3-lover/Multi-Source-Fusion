@@ -1,9 +1,9 @@
 # multi_source_fusion/data/loaders.py
 
-import pandas as pd
 import numpy as np
-from typing import Optional
-from ..core.config import config
+import pandas as pd
+
+from core.config import config
 
 
 def load_imu_data(file_path: str) -> pd.DataFrame:
@@ -20,6 +20,15 @@ def load_imu_data(file_path: str) -> pd.DataFrame:
             print(f"警告: IMU数据文件 '{file_path}' 为空")
             return pd.DataFrame()
 
+        # 检查数据完整性
+        if df.isnull().any().any():
+            print(f"警告: IMU数据包含NaN值，将进行清理")
+            df = df.dropna()
+
+        if len(df) == 0:
+            print(f"警告: 清理后IMU数据为空")
+            return pd.DataFrame()
+
     except FileNotFoundError:
         print(f"错误: IMU数据文件未找到于 '{file_path}'")
         return pd.DataFrame()
@@ -27,24 +36,40 @@ def load_imu_data(file_path: str) -> pd.DataFrame:
         print(f"错误: 读取IMU数据文件时出错: {e}")
         return pd.DataFrame()
 
-    # 计算时间间隔 dt，第一行使用配置文件中的频率
-    dt = df['timestamp'].diff()
-    # 使用配置中的IMU频率填充第一个NaN值
-    dt.iloc[0] = 1.0 / config.get('sensor_params.imu.rate_hz', 100.0)
+    try:
+        # 计算时间间隔 dt，第一行使用配置文件中的频率
+        dt = df['timestamp'].diff()
+        # 使用配置中的IMU频率填充第一个NaN值
+        dt.iloc[0] = 1.0 / config.get('sensor_params.imu.rate_hz', 100.0)
 
-    # 将增量转换为速率
-    # 陀螺仪输出：角速度 (rad/s)
-    df['gx'] = df['d_angle_x'] / dt
-    df['gy'] = df['d_angle_y'] / dt
-    df['gz'] = df['d_angle_z'] / dt
+        # 确保dt不为0或负数
+        dt = dt.abs()
+        dt = dt.replace(0, 1.0 / config.get('sensor_params.imu.rate_hz', 100.0))
 
-    # 加速度计输出：加速度 (m/s^2)
-    df['ax'] = df['d_vel_x'] / dt
-    df['ay'] = df['d_vel_y'] / dt
-    df['az'] = df['d_vel_z'] / dt
+        # 将增量转换为速率
+        # 陀螺仪输出：角速度 (rad/s)
+        df['gx'] = df['d_angle_x'] / dt
+        df['gy'] = df['d_angle_y'] / dt
+        df['gz'] = df['d_angle_z'] / dt
 
-    # 返回包含时间戳和速率的DataFrame
-    return df[['timestamp', 'gx', 'gy', 'gz', 'ax', 'ay', 'az']]
+        # 加速度计输出：加速度 (m/s^2)
+        df['ax'] = df['d_vel_x'] / dt
+        df['ay'] = df['d_vel_y'] / dt
+        df['az'] = df['d_vel_z'] / dt
+
+        # 检查转换后的数据是否有异常值
+        result_df = df[['timestamp', 'gx', 'gy', 'gz', 'ax', 'ay', 'az']]
+
+        # 移除无穷大和NaN值
+        result_df = result_df.replace([np.inf, -np.inf], np.nan)
+        result_df = result_df.dropna()
+
+        print(f"IMU数据处理完成，有效数据点: {len(result_df)}")
+        return result_df
+
+    except Exception as e:
+        print(f"错误: 处理IMU数据时出错: {e}")
+        return pd.DataFrame()
 
 
 def load_gnss_data(file_path: str) -> pd.DataFrame:
@@ -60,9 +85,20 @@ def load_gnss_data(file_path: str) -> pd.DataFrame:
             print(f"警告: GNSS数据文件 '{file_path}' 为空")
             return pd.DataFrame()
 
+        # 检查数据完整性
+        if df.isnull().any().any():
+            print(f"警告: GNSS数据包含NaN值，将进行清理")
+            df = df.dropna()
+
+        if len(df) == 0:
+            print(f"警告: 清理后GNSS数据为空")
+            return pd.DataFrame()
+
         # 将度转换为弧度以便内部计算
         df['lat'] = np.radians(df['lat'])
         df['lon'] = np.radians(df['lon'])
+
+        print(f"GNSS数据处理完成，有效数据点: {len(df)}")
         return df
 
     except FileNotFoundError:
@@ -86,6 +122,16 @@ def load_odo_data(file_path: str) -> pd.DataFrame:
             print(f"警告: ODO数据文件 '{file_path}' 为空")
             return pd.DataFrame()
 
+        # 检查数据完整性
+        if df.isnull().any().any():
+            print(f"警告: ODO数据包含NaN值，将进行清理")
+            df = df.dropna()
+
+        if len(df) == 0:
+            print(f"警告: 清理后ODO数据为空")
+            return pd.DataFrame()
+
+        print(f"ODO数据处理完成，有效数据点: {len(df)}")
         return df
 
     except FileNotFoundError:
@@ -126,7 +172,6 @@ def load_map_data(file_path: str) -> pd.DataFrame:
             return pd.DataFrame()
 
     # 根据需求文档，重命名一些关键列以保持一致性
-    # 这里假设了原始文件中的列名，可能需要根据实际文件进行调整
     rename_map = {
         '纬度': 'lat', '经度': 'lon', '大地高度': 'h', '方位角': 'azimuth'
     }
@@ -138,4 +183,5 @@ def load_map_data(file_path: str) -> pd.DataFrame:
     if 'lon' in df.columns:
         df['lon'] = np.radians(df['lon'])
 
+    print(f"地图数据处理完成，有效数据点: {len(df)}")
     return df

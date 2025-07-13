@@ -13,7 +13,7 @@ class Config:
     _instance = None
     _config_data = None
 
-    def __new__(cls, config_path: str = '../config.yaml'):
+    def __new__(cls, config_path: str = 'config.yaml'):
         if cls._instance is None:
             cls._instance = super(Config, cls).__new__(cls)
             cls._instance._load_config(config_path)
@@ -49,9 +49,9 @@ class Config:
                 'output_path': 'results/'
             },
             'sensor_params': {
-                'imu': {'rate_hz': 100.0},
+                'imu': {'rate_hz': 200.0},
                 'gnss': {'rate_hz': 1.0},
-                'odo': {'rate_hz': 10.0}
+                'odo': {'rate_hz': 200.0}
             },
             'mtinn_hyperparams': {
                 'learning_rate': 0.001,
@@ -64,6 +64,10 @@ class Config:
                 'earth_rate': 7.292115e-5,
                 'earth_a': 6378137.0,
                 'earth_e2': 0.00669438
+            },
+            'fusion_strategy': {
+                'mode': 'math_only',  # 默认使用纯数学模型
+                'model_weight': 0.0
             }
         }
 
@@ -84,6 +88,24 @@ class Config:
         except (KeyError, TypeError):
             return default
 
+    def validate_fusion_strategy(self):
+        """验证融合策略配置的合理性"""
+        mode = self.get('fusion_strategy.mode', 'math_only')
+        model_weight = self.get('fusion_strategy.model_weight', 0.0)
+
+        valid_modes = ['math_only', 'model_only', 'weighted_fusion', 'adaptive_fusion']
+
+        if mode not in valid_modes:
+            print(f"警告: 无效的融合模式 '{mode}', 使用默认值 'math_only'")
+            self._config_data['fusion_strategy']['mode'] = 'math_only'
+            mode = 'math_only'
+
+        if mode == 'weighted_fusion' and not (0.0 <= model_weight <= 1.0):
+            print(f"警告: 加权融合模式下模型权重 {model_weight} 无效，设置为 0.1")
+            self._config_data['fusion_strategy']['model_weight'] = 0.1
+
+        return mode, self.get('fusion_strategy.model_weight', 0.0)
+
 
 # 创建一个全局可访问的配置实例
 config = Config()
@@ -92,4 +114,5 @@ if __name__ == '__main__':
     # 测试配置加载和访问
     print("地球自转速率:", config.get('physical_params.earth_rate'))
     print("IMU采样率:", config.get('sensor_params.imu.rate_hz'))
-    print("不存在的键:", config.get('non_existent.key', '默认值'))
+    print("融合策略:", config.get('fusion_strategy.mode'))
+    config.validate_fusion_strategy()
