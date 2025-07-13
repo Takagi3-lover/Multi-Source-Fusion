@@ -1,137 +1,132 @@
 # multi_source_fusion/core/coordinates.py
 
 import numpy as np
-from core.config import config
+
 
 class CoordinateSystem:
     """
-    提供所有坐标系变换的静态方法。
-    内部导航坐标系标准化为 ENU (东-北-天)。
-    载体坐标系为 RFU (右-前-上)。
+    移植自 earth.h 和 rotation.h.
+    注意: KF-GINS 使用的导航坐标系是 NED (北-东-下), 姿态欧拉角顺序是 ZYX (yaw, pitch, roll).
     """
-
-    # 从配置文件加载物理常数
-    A = config.get('physical_params.earth_a', 6378137.0)
-    E2 = config.get('physical_params.earth_e2', 0.00669438)
-    EARTH_RATE = config.get('physical_params.earth_rate', 7.292115e-5)
+    WGS84_WIE = 7.2921151467E-5
+    WGS84_RA = 6378137.0
+    WGS84_E1 = 0.0066943799901413156
 
     @staticmethod
-    def get_radii(lat_rad: float) -> tuple:
-        """
-        根据纬度计算地球的子午圈和卯酉圈曲率半径 (RM, RN)。
+    def get_radii_and_gravity(pos: np.ndarray) -> tuple:
+        lat, h = pos[0], pos[2]
+        sin_lat = np.sin(lat)
+        sin_lat_sq = sin_lat * sin_lat
 
-        Args:
-            lat_rad (float): 纬度 (单位：弧度)。
+        den_sqrt = np.sqrt(1 - CoordinateSystem.WGS84_E1 * sin_lat_sq)
+        rn = CoordinateSystem.WGS84_RA / den_sqrt
+        rm = CoordinateSystem.WGS84_RA * (1 - CoordinateSystem.WGS84_E1) / (den_sqrt ** 3)
 
-        Returns:
-            tuple: (RM, RN) in meters.
-        """
-        sin_lat_sq = np.sin(lat_rad) ** 2
-        den = 1 - CoordinateSystem.E2 * sin_lat_sq
-
-        rm = CoordinateSystem.A * (1 - CoordinateSystem.E2) / (den ** 1.5)
-        rn = CoordinateSystem.A / np.sqrt(den)
-
-        return rm, rn
-
-    @staticmethod
-    def wgs84_to_ecef(lat_rad: float, lon_rad: float, h: float) -> np.ndarray:
-        """
-        将WGS-84大地坐标 (纬度, 经度, 高程) 转换为地心地固 (ECEF) 坐标。
-
-        Args:
-            lat_rad (float): 纬度 (弧度)。
-            lon_rad (float): 经度 (弧度)。
-            h (float): 高程 (米)。
-
-        Returns:
-            np.ndarray: ECEF坐标 [X, Y, Z] (米)。
-        """
-        _, rn = CoordinateSystem.get_radii(lat_rad)
-        cos_lat = np.cos(lat_rad)
-        sin_lat = np.sin(lat_rad)
-        cos_lon = np.cos(lon_rad)
-        sin_lon = np.sin(lon_rad)
-
-        x = (rn + h) * cos_lat * cos_lon
-        y = (rn + h) * cos_lat * sin_lon
-        z = (rn * (1 - CoordinateSystem.E2) + h) * sin_lat
-
-        return np.array([x, y, z])
+        sin2 = sin_lat * sin_lat
+        sin4 = sin2 * sin2
+        gamma_a = 9.7803267715
+        gamma_0 = gamma_a * (
+                    1 + 0.0052790414 * sin2 + 0.0000232718 * sin4 + 0.0000001262 * sin2 * sin4 + 0.0000000007 * sin4 * sin4)
+        gamma = gamma_0 - (3.0877e-6 - 4.3e-9 * sin2) * h + 0.72e-12 * h * h
+        return rm, rn, gamma
 
     @staticmethod
-    def ecef_to_enu(ecef_pos: np.ndarray, ref_lat_rad: float, ref_lon_rad: float, ref_h: float) -> np.ndarray:
-        """
-        将ECEF坐标转换为相对于参考点的局部ENU (东-北-天) 坐标。
+    def euler_to_matrix(euler: np.ndarray) -> np.ndarray:
+        y, p, r = euler[2], euler[1], euler[0]
+        cy, sy = np.cos(y), np.sin(y)
+        cp, sp = np.cos(p), np.sin(p)
+        cr, sr = np.cos(r), np.sin(r)
 
-        Args:
-            ecef_pos (np.ndarray): 目标点的ECEF坐标 [X, Y, Z]。
-            ref_lat_rad (float): 参考点的纬度 (弧度)。
-            ref_lon_rad (float): 参考点的经度 (弧度)。
-            ref_h (float): 参考点的高程 (米)。
+        Rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
+        Ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+        Rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
 
-        Returns:
-            np.ndarray: 局部ENU坐标 [E, N, U] (米)。
-        """
-        ref_ecef = CoordinateSystem.wgs84_to_ecef(ref_lat_rad, ref_lon_rad, ref_h)
-        delta_ecef = ecef_pos - ref_ecef
+        return Rz @ Ry @ Rx
 
-        cos_lat = np.cos(ref_lat_rad)
-        sin_lat = np.sin(ref_lat_rad)
-        cos_lon = np.cos(ref_lon_rad)
-        sin_lon = np.sin(ref_lon_rad)
+    @staticmethod
+    def matrix_to_euler(dcm: np.ndarray) -> np.ndarray:
+        euler = np.zeros(3)
+        euler[1] = np.arcsin(-dcm[2, 0])
+        if np.abs(np.cos(euler[1])) > 1e-10:
+            euler[0] = np.arctan2(dcm[2, 1], dcm[2, 2])
+            euler[2] = np.arctan2(dcm[1, 0], dcm[0, 0])
+        else:
+            euler[0] = 0.0
+            euler[2] = np.arctan2(-dcm[0, 1], dcm[1, 1])
+        return euler
 
-        # 旋转矩阵从ECEF到ENU
-        rot_matrix = np.array([
-            [-sin_lon, cos_lon, 0],
-            [-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat],
-            [cos_lat * cos_lon, cos_lat * sin_lon, sin_lat]
+    @staticmethod
+    def rot_vec_to_quaternion(rot_vec: np.ndarray) -> np.ndarray:
+        angle = np.linalg.norm(rot_vec)
+        if angle < 1e-12:
+            return np.array([1.0, 0.0, 0.0, 0.0])
+        axis = rot_vec / angle
+        half_angle = angle / 2.0
+        w = np.cos(half_angle)
+        v = axis * np.sin(half_angle)
+        return np.array([w, v[0], v[1], v[2]])
+
+    @staticmethod
+    def quaternion_multiply(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
+        w1, x1, y1, z1 = q1
+        w2, x2, y2, z2 = q2
+        w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+        x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+        y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+        z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+        res = np.array([w, x, y, z])
+        return res / np.linalg.norm(res)
+
+    @staticmethod
+    def quaternion_to_matrix(q: np.ndarray) -> np.ndarray:
+        w, x, y, z = q / np.linalg.norm(q)
+        return np.array([
+            [1 - 2 * y ** 2 - 2 * z ** 2, 2 * x * y - 2 * w * z, 2 * x * z + 2 * w * y],
+            [2 * x * y + 2 * w * z, 1 - 2 * x ** 2 - 2 * z ** 2, 2 * y * z - 2 * w * x],
+            [2 * x * z - 2 * w * y, 2 * y * z + 2 * w * x, 1 - 2 * x ** 2 - 2 * y ** 2]
         ])
 
-        enu_pos = rot_matrix @ delta_ecef
-        return enu_pos
+    @staticmethod
+    def matrix_to_quaternion(dcm: np.ndarray) -> np.ndarray:
+        tr = np.trace(dcm)
+        if tr > 0:
+            S = np.sqrt(tr + 1.0) * 2
+            w = 0.25 * S
+            x = (dcm[2, 1] - dcm[1, 2]) / S
+            y = (dcm[0, 2] - dcm[2, 0]) / S
+            z = (dcm[1, 0] - dcm[0, 1]) / S
+        elif (dcm[0, 0] > dcm[1, 1]) and (dcm[0, 0] > dcm[2, 2]):
+            S = np.sqrt(1.0 + dcm[0, 0] - dcm[1, 1] - dcm[2, 2]) * 2
+            w = (dcm[2, 1] - dcm[1, 2]) / S
+            x = 0.25 * S
+            y = (dcm[0, 1] + dcm[1, 0]) / S
+            z = (dcm[0, 2] + dcm[2, 0]) / S
+        elif dcm[1, 1] > dcm[2, 2]:
+            S = np.sqrt(1.0 + dcm[1, 1] - dcm[0, 0] - dcm[2, 2]) * 2
+            w = (dcm[0, 2] - dcm[2, 0]) / S
+            x = (dcm[0, 1] + dcm[1, 0]) / S
+            y = 0.25 * S
+            z = (dcm[1, 2] + dcm[2, 1]) / S
+        else:
+            S = np.sqrt(1.0 + dcm[2, 2] - dcm[0, 0] - dcm[1, 1]) * 2
+            w = (dcm[1, 0] - dcm[0, 1]) / S
+            x = (dcm[0, 2] + dcm[2, 0]) / S
+            y = (dcm[1, 2] + dcm[2, 1]) / S
+            z = 0.25 * S
+        return np.array([w, x, y, z])
 
     @staticmethod
-    def get_cbn(roll: float, pitch: float, yaw: float) -> np.ndarray:
-        """
-        根据欧拉角计算从载体坐标系(b)到导航坐标系(n)的旋转矩阵 C_bn。
-        该实现基于需求文档中的 C_nb 矩阵，并进行转置。
-        欧拉角顺序: Z(yaw)-X(pitch)-Y(roll)
-
-        Args:
-            roll (float): 横滚角 (phi) in radians.
-            pitch (float): 俯仰角 (theta) in radians.
-            yaw (float): 偏航角 (psi) in radians.
-
-        Returns:
-            np.ndarray: 3x3 旋转矩阵 C_bn。
-        """
-        c_phi, s_phi = np.cos(roll), np.sin(roll)
-        c_theta, s_theta = np.cos(pitch), np.sin(pitch)
-        c_psi, s_psi = np.cos(yaw), np.sin(yaw)
-
-        # 根据需求文档中定义的 C_nb (n-frame to b-frame)
-        c_nb = np.array([
-            [c_phi * c_psi + s_phi * s_theta * s_psi, -c_phi * s_psi + s_phi * s_theta * c_psi, -s_phi * c_theta],
-            [s_psi * c_theta, c_psi * c_theta, s_theta],
-            [s_phi * c_psi - c_phi * s_theta * s_psi, -s_phi * s_psi - c_phi * s_theta * c_psi, c_phi * c_theta]
-        ])
-
-        # C_bn 是 C_nb 的转置
-        return c_nb.T
+    def skew_symmetric(vec: np.ndarray) -> np.ndarray:
+        return np.array([[0, -vec[2], vec[1]], [vec[2], 0, -vec[0]], [-vec[1], vec[0], 0]])
 
     @staticmethod
-    def get_cnb(roll: float, pitch: float, yaw: float) -> np.ndarray:
-        """
-        根据欧拉角计算从导航坐标系(n)到载体坐标系(b)的旋转矩阵 C_nb。
+    def DRi(pos: np.ndarray) -> np.ndarray:
+        rm, rn, _ = CoordinateSystem.get_radii_and_gravity(pos)
+        lat, h = pos[0], pos[2]
+        return np.diag([1.0 / (rm + h), 1.0 / ((rn + h) * np.cos(lat)), -1.0])
 
-        Args:
-            roll (float): 横滚角 (phi) in radians.
-            pitch (float): 俯仰角 (theta) in radians.
-            yaw (float): 偏航角 (psi) in radians.
-
-        Returns:
-            np.ndarray: 3x3 旋转矩阵 C_nb。
-        """
-        c_bn = CoordinateSystem.get_cbn(roll, pitch, yaw)
-        return c_bn.T
+    @staticmethod
+    def DR(pos: np.ndarray) -> np.ndarray:
+        rm, rn, _ = CoordinateSystem.get_radii_and_gravity(pos)
+        lat, h = pos[0], pos[2]
+        return np.diag([(rm + h), (rn + h) * np.cos(lat), -1.0])

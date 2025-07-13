@@ -2,56 +2,51 @@
 
 # 1. 数据路径配置
 data_paths:
-  imu_path: "E:/learn/code/python/multi_source_fusion/data_raw/deal/IMU.txt"
-  gnss_path: "E:/learn/code/python/multi_source_fusion/data_raw/deal/BeiDou.pos"
+  imu_path: "E:/learn/code/python/multi_source_fusion/data_raw/ADIS/ADIS16465.txt"
+  gnss_path: "E:/learn/code/python/multi_source_fusion/data_raw/ADIS/GNSS_RTK.pos"
   odo_path: "E:/learn/code/python/multi_source_fusion/data_raw/deal/odo_3d.txt"
   map_path: "E:/learn/code/python/multi_source_fusion/data_raw/deal/truth_convert.csv"
   ground_truth_path: "E:/learn/code/python/multi_source_fusion/data_raw/deal/truth_convert.csv"
   output_path: "E:/learn/code/python/multi_source_fusion/results/"
   model_save_dir: "E:/learn/code/python/multi_source_fusion/models/"
 
-# 2. 传感器特性参数 - 基于KF-GINS标准设置
 sensor_params:
   imu:
-    rate_hz: 200.0
-    # 陀螺仪噪声参数 - 基于MEMS IMU典型值
-    gyro_noise_std: 1.0e-4        # 角度随机游走 (rad/s)
-    gyro_bias_std: 1.0e-4         # 偏置初始不确定性 (rad/s)
-    gyro_bias_walk: 1.0e-6        # 偏置随机游走 (rad/s²)
-    gyro_scale_std: 1.0e-3        # 比例因子初始不确定性
-    # 加速度计噪声参数 - 基于MEMS IMU典型值
-    accel_noise_std: 1.0e-3       # 速度随机游走 (m/s²)
-    accel_bias_std: 1.0e-3        # 偏置初始不确定性 (m/s²)
-    accel_bias_walk: 1.0e-5       # 偏置随机游走 (m/s³)
-    accel_scale_std: 1.0e-3       # 比例因子初始不确定性
-    # 其他参数
-    scale_walk: 1.0e-8            # 比例因子随机游走
-  gnss:
-    rate_hz: 1.0
-    # GNSS测量噪声标准差
-    pos_std_h: 1.0                # 水平位置标准差 (m)
-    pos_std_v: 2.0                # 垂直位置标准差 (m)
-    vel_std_h: 0.1                # 水平速度标准差 (m/s)
-    vel_std_v: 0.2                # 垂直速度标准差 (m/s)
-  odo:
-    enable: false                 # 是否启用里程计数据
-    rate_hz: 200.0
-    vel_std: 0.05                 # 速度测量标准差 (m/s)
+    rate_hz: 200.0 # 必须与您的IMU数据频率一致
 
-# 3. 初始对准与状态 - 基于KF-GINS标准设置
+ant_lever: [ 0.136, -0.301, -0.184 ] # 天线杆臂(m), IMU坐标系下(前-右-下)
+
+# 初始状态
 initial_state:
-  # 初始姿态 (roll, pitch, yaw) in degrees
-  init_att: [0, 0, 240.42]
-  # 初始姿态不确定性 (degrees) - 更保守的设置
-  init_att_std: [0.5, 0.5, 1.0]
-  # 初始速度 (Ve, Vn, Vu) in m/s
-  init_vel: [0.0, 0.0, 0.0]
-  # 初始速度不确定性 (m/s)
-  init_vel_std: [0.1, 0.1, 0.1]
-  # 初始位置 (lat, lon, h) in deg, deg, m
-  init_pos: [38.327958000, 114.200612500, 139.910762152]
-  # 初始位置不确定性 (m) - 基于GNSS精度
-  init_pos_std: [2.0, 2.0, 5.0]
+  pos: [ 38.327958, 114.200612, 139.91 ] # [deg, deg, m]
+  vel: [ 0.0, 0.0, 0.0 ]                 # [m/s, m/s, m/s] (北-东-下)
+  att: [ 0.0, 0.0, 240.42 ]              # [deg, deg, deg] (滚转, 俯仰, 航向)
+  # 以下为初始IMU误差，通常设为0
+  gyrbias: [ 0, 0, 0 ]                   # [deg/h]
+  accbias: [ 0, 0, 0 ]                   # [mGal]
+  gyrscale: [ 0, 0, 0 ]                  # [ppm]
+  accscale: [ 0, 0, 0 ]                  # [ppm]
+
+# 初始状态标准差
+initial_state_std:
+  pos: [ 10.0, 10.0, 10.0 ]              # [m, m, m]
+  vel: [ 0.1, 0.1, 0.1 ]                 # [m/s, m/s, m/s]
+  att: [ 1.0, 1.0, 5.0 ]                 # [deg, deg, deg]
+  gyrbias: [ 50, 50, 50 ]                # [deg/h]
+  accbias: [ 250, 250, 250 ]             # [mGal]
+  gyrscale: [ 1000, 1000, 1000 ]         # [ppm]
+  accscale: [ 1000, 1000, 1000 ]         # [ppm]
+
+# IMU噪声建模参数 (来自kf-gins.yaml)
+imunoise:
+  arw: [0.24, 0.24, 0.24]                # [deg/sqrt(hr)] 角度随机游走
+  vrw: [0.24, 0.24, 0.24]                # [m/s/sqrt(hr)] 速度随机游走
+  gbstd: [50.0, 50.0, 50.0]              # [deg/hr] 零偏不稳定性
+  abstd: [250.0, 250.0, 250.0]           # [mGal]
+  gsstd: [1000.0, 1000.0, 1000.0]        # [ppm] 比例因子不稳定性
+  asstd: [1000.0, 1000.0, 1000.0]        # [ppm]
+  corrtime: 1.0                          # [hr] 相关时间
+
 
 # 4. 融合策略配置
 fusion_strategy:
@@ -100,10 +95,11 @@ eskf_params:
   # 最大允许的姿态校正 (度)
   max_attitude_correction_deg: 50.0
   # 最大允许的速度校正 (m/s)
-  max_velocity_correction: 200.0
+  max_velocity_correction: 20.0
   # 最大允许的位置校正 (m)
-  max_position_correction: 1000.0
+  max_position_correction: 200.0
   # 是否使用严格的重力模型
   use_gravity_model: true
   # 是否使用中点积分方法
   use_midpoint_integration: true
+
