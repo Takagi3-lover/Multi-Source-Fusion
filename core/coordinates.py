@@ -26,33 +26,52 @@ class CoordinateSystem:
         sin4 = sin2 * sin2
         gamma_a = 9.7803267715
         gamma_0 = gamma_a * (
-                    1 + 0.0052790414 * sin2 + 0.0000232718 * sin4 + 0.0000001262 * sin2 * sin4 + 0.0000000007 * sin4 * sin4)
+                1 + 0.0052790414 * sin2 + 0.0000232718 * sin4 + 0.0000001262 * sin2 * sin4 + 0.0000000007 * sin4 * sin4)
         gamma = gamma_0 - (3.0877e-6 - 4.3e-9 * sin2) * h + 0.72e-12 * h * h
         return rm, rn, gamma
 
     @staticmethod
     def euler_to_matrix(euler: np.ndarray) -> np.ndarray:
-        y, p, r = euler[2], euler[1], euler[0]
+        # kf-gins 使用 ZYX 顺序 (yaw, pitch, roll)
+        r = euler[0]
+        p = euler[1]
+        y = euler[2]
+
         cy, sy = np.cos(y), np.sin(y)
         cp, sp = np.cos(p), np.sin(p)
         cr, sr = np.cos(r), np.sin(r)
 
+        # C_b^n = C_n^b.T = (R_x(roll) * R_y(pitch) * R_z(yaw)).T
+        # 这里直接构建 C_b^n
         Rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
         Ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
         Rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
 
+        # 旋转顺序为 Z-Y-X
         return Rz @ Ry @ Rx
 
     @staticmethod
     def matrix_to_euler(dcm: np.ndarray) -> np.ndarray:
+        """
+        修正：参考 rotation.h 实现，处理奇异点。
+        返回 [roll, pitch, yaw]
+        """
         euler = np.zeros(3)
+        # pitch
         euler[1] = np.arcsin(-dcm[2, 0])
-        if np.abs(np.cos(euler[1])) > 1e-10:
-            euler[0] = np.arctan2(dcm[2, 1], dcm[2, 2])
-            euler[2] = np.arctan2(dcm[1, 0], dcm[0, 0])
-        else:
+
+        # 处理万向节死锁
+        if np.abs(dcm[2, 0]) >= 0.999:
+            # roll 设置为 0
             euler[0] = 0.0
-            euler[2] = np.arctan2(-dcm[0, 1], dcm[1, 1])
+            # yaw
+            euler[2] = np.arctan2(dcm[1, 2] - dcm[0, 1], dcm[0, 2] + dcm[1, 1])
+        else:
+            # roll
+            euler[0] = np.arctan2(dcm[2, 1], dcm[2, 2])
+            # yaw
+            euler[2] = np.arctan2(dcm[1, 0], dcm[0, 0])
+
         return euler
 
     @staticmethod
@@ -64,6 +83,7 @@ class CoordinateSystem:
         half_angle = angle / 2.0
         w = np.cos(half_angle)
         v = axis * np.sin(half_angle)
+        # 返回 [w, x, y, z]
         return np.array([w, v[0], v[1], v[2]])
 
     @staticmethod
@@ -75,11 +95,13 @@ class CoordinateSystem:
         y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
         z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
         res = np.array([w, x, y, z])
+        # 保持归一化
         return res / np.linalg.norm(res)
 
     @staticmethod
     def quaternion_to_matrix(q: np.ndarray) -> np.ndarray:
-        w, x, y, z = q / np.linalg.norm(q)
+        q = q / np.linalg.norm(q)
+        w, x, y, z = q
         return np.array([
             [1 - 2 * y ** 2 - 2 * z ** 2, 2 * x * y - 2 * w * z, 2 * x * z + 2 * w * y],
             [2 * x * y + 2 * w * z, 1 - 2 * x ** 2 - 2 * z ** 2, 2 * y * z - 2 * w * x],
@@ -88,7 +110,7 @@ class CoordinateSystem:
 
     @staticmethod
     def matrix_to_quaternion(dcm: np.ndarray) -> np.ndarray:
-        tr = np.trace(dcm)
+        tr = dcm.trace()
         if tr > 0:
             S = np.sqrt(tr + 1.0) * 2
             w = 0.25 * S
@@ -113,7 +135,8 @@ class CoordinateSystem:
             x = (dcm[0, 2] + dcm[2, 0]) / S
             y = (dcm[1, 2] + dcm[2, 1]) / S
             z = 0.25 * S
-        return np.array([w, x, y, z])
+        q = np.array([w, x, y, z])
+        return q / np.linalg.norm(q)
 
     @staticmethod
     def skew_symmetric(vec: np.ndarray) -> np.ndarray:
